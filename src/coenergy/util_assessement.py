@@ -139,5 +139,3 @@ def load_simulation_data(folder_path: Path) -> ToSaveSimul:
     # Combine all batches into one ToSaveSimul object
     return combine_batches(batches)
 
-
-
