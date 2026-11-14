@@ -55,6 +55,30 @@ class CNNGRU(nn.Module):
         return self.mlp(torch.cat([seq.mean(dim=1), seq[:, -1]], dim=1))
 
 
+class BaselineCNN(nn.Module):
+    """Simple CNN baseline: 3 conv + max-pool blocks, then a fully connected layer.
+
+    No dT/dt channel, no recurrence: the flattened features give every time step its own weights.
+    Shapes: (B, 2, T) -> CNN -> (B, 64, T/8) -> flatten -> (B, 64*T/8) -> MLP -> (B, n_out).
+    """
+
+    def __init__(self, n_out: int, input_length: int = 480) -> None:
+        super().__init__()
+        self.cnn = nn.Sequential(
+            nn.Conv1d(2, 16, kernel_size=5, padding=2), nn.ReLU(), nn.MaxPool1d(2),
+            nn.Conv1d(16, 32, kernel_size=5, padding=2), nn.ReLU(), nn.MaxPool1d(2),
+            nn.Conv1d(32, 64, kernel_size=5, padding=2), nn.ReLU(), nn.MaxPool1d(2),
+        )
+        self.mlp = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(64 * (input_length // 8), 128), nn.ReLU(), nn.Dropout(0.1),
+            nn.Linear(128, n_out),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.mlp(self.cnn(x))
+
+
 class PlainHead(nn.Module):
     """Unconstrained head: 6 raw outputs are read as normalized targets and converted back."""
 
@@ -145,3 +169,15 @@ def build_cnn_gru(
     else:
         raise ValueError(f"Unknown head {head!r}, expected 'plain' or 'physics'")
     return Regressor(CNNGRU(dT_std, n_out=out.n_raw, width=width), out)
+
+
+def build_baseline_cnn(tgt_mean: torch.Tensor, tgt_std: torch.Tensor, input_length: int = 480) -> Regressor:
+    """Build the baseline CNN with a plain head, returning targets in physical units.
+
+    Args:
+        tgt_mean: Training target means (physical units), from the scalers.
+        tgt_std: Training target stds (physical units), from the scalers.
+        input_length: Number of time steps per scenario.
+    """
+    head = PlainHead(tgt_mean, tgt_std)
+    return Regressor(BaselineCNN(n_out=head.n_raw, input_length=input_length), head)
