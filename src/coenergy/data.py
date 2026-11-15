@@ -47,13 +47,17 @@ def batch_files(data_dir: Path) -> list[str]:
     return files
 
 
-def load_splits(data_dir: Path, split_path: Path, scalers: Scalers) -> dict[str, SplitData]:
+def load_splits(
+    data_dir: Path, split_path: Path, scalers: Scalers, round_inputs: bool = True,
+) -> dict[str, SplitData]:
     """Load every split, apply the EDA rounding and the saved normalization.
 
     Args:
         data_dir: Folder with the batch_*.pt files.
         split_path: File saved by the EDA with 'train', 'val', 'test' index tensors and 'seed'.
         scalers: Scalers fitted on the training split of that same file.
+        round_inputs: Round temperature to 0.01 degC and power to 0.1 W, as in the assessment's
+            loading code. Set to False only for diagnostics.
 
     Returns:
         A dict mapping 'train', 'val', 'test' to their `SplitData`.
@@ -93,9 +97,12 @@ def load_splits(data_dir: Path, split_path: Path, scalers: Scalers) -> dict[str,
                 for name in SPLIT_NAMES
             }
 
-        # Same rounding as the assessment example and the EDA
-        temp = scalers.norm_temperature(batch.indoor_temperature.round(decimals=2))
-        exc = scalers.norm_excitation(batch.indoor_U.round(decimals=1))
+        # Same rounding as the assessment example and the EDA (unless disabled for diagnostics)
+        raw_temp, raw_exc = batch.indoor_temperature, batch.indoor_U
+        if round_inputs:
+            raw_temp, raw_exc = raw_temp.round(decimals=2), raw_exc.round(decimals=1)
+        temp = scalers.norm_temperature(raw_temp)
+        exc = scalers.norm_excitation(raw_exc)
         tgt = scalers.norm_targets(torch.cat([batch.HLC.unsqueeze(1), batch.Hb, batch.CDT], dim=1))
         del batch
 

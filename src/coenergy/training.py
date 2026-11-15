@@ -6,6 +6,7 @@ import copy
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Callable
 
 import pandas as pd
 import torch
@@ -64,6 +65,8 @@ def train_model(
     cfg: TrainConfig,
     device: torch.device,
     checkpoint_path: Path | None = None,
+    loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
+    verbose: bool = True,
 ) -> pd.DataFrame:
     """Train with AdamW and a one-cycle schedule, keep the weights with the best validation loss.
 
@@ -75,6 +78,9 @@ def train_model(
         cfg: Training hyperparameters.
         device: Device to train on.
         checkpoint_path: If given, the best weights and the config are saved there.
+        loss_fn: Training loss `loss_fn(pred_phys, y_norm)`. Defaults to the normalized MSE.
+            The validation loss is always the normalized MSE, so runs stay comparable.
+        verbose: Print one line per epoch.
 
     Returns:
         One row per epoch: train loss, val loss, val R2 per target, learning rate, time.
@@ -104,7 +110,8 @@ def train_model(
         for i in range(steps_per_epoch):
             idx = perm[i * cfg.batch_size:(i + 1) * cfg.batch_size]
             xb, yb = x_tr[idx].to(device, non_blocking=True), y_tr[idx].to(device, non_blocking=True)
-            loss = normalized_mse(model(xb), yb, mean, std)
+            pred = model(xb)
+            loss = normalized_mse(pred, yb, mean, std) if loss_fn is None else loss_fn(pred, yb)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             opt.step()
@@ -122,9 +129,10 @@ def train_model(
                **{f'R2_{l}': v for l, v in zip(labels, r2.tolist())},
                'lr': sched.get_last_lr()[0], 'time_s': time.time() - t0}
         history.append(row)
-        print(f"epoch {epoch:2d} | train {train_loss:.4f} | val {val_loss:.4f} | R2 "
-              + ' '.join(f'{l} {v:.3f}' for l, v in zip(labels, r2.tolist()))
-              + f" | {row['time_s']:.0f}s", flush=True)
+        if verbose:
+            print(f"epoch {epoch:2d} | train {train_loss:.4f} | val {val_loss:.4f} | R2 "
+                  + ' '.join(f'{l} {v:.3f}' for l, v in zip(labels, r2.tolist()))
+                  + f" | {row['time_s']:.0f}s", flush=True)
 
         if val_loss < best_loss:
             best_loss, best_state, stale = val_loss, copy.deepcopy(model.state_dict()), 0

@@ -13,6 +13,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+EXTRA_CHANNELS = ('dT', 'd2T', 'energy')
+
+
 def derivative_std(x: torch.Tensor) -> float:
     """Std of the per-step change of normalized temperature, used to scale the dT/dt channel.
 
@@ -22,15 +25,46 @@ def derivative_std(x: torch.Tensor) -> float:
     return x[:, 0].diff(dim=1).std().item()
 
 
-class CNNGRU(nn.Module):
-    """CNN feature extractor followed by a bidirectional GRU, with a dT/dt input channel.
+def second_derivative_std(x: torch.Tensor) -> float:
+    """Std of the per-step change of dT/dt (normalized temperature), used to scale the d2T/dt2 channel.
 
-    Shapes: (B, 2, T) -> add dT/dt -> (B, 3, T) -> CNN -> (B, width, T/8) -> BiGRU -> (B, T/8, 2*width) -> mean and last step -> (B, 4*width) -> MLP -> (B, n_out).
+    Args:
+        x: Training inputs, shape (n, 2, T), channel 0 is normalized temperature.
+    """
+    return x[:, 0].diff(n=2, dim=1).std().item()
+
+
+class CNNGRU(nn.Module):
+    """CNN feature extractor followed by a bidirectional GRU, with extra input channels derived from T and U.
+
+    The extra channels are computed inside the model from the two inputs, so the model's interface
+    stays (T(t), U(t)) -> targets:
+    - 'dT': per-step temperature change, scaled by `dT_std`;
+    - 'd2T': per-step change of dT, scaled by `d2T_std`;
+    - 'energy': cumulative heating energy so far, as a fraction of the window (0 to 1).
+
+    Shapes: (B, 2, T) -> add extra channels -> (B, 2 + k, T) -> CNN -> (B, width, T/8) -> BiGRU -> (B, T/8, 2*width) -> mean and last step -> (B, 4*width) -> MLP -> (B, n_out).
     """
 
-    def __init__(self, dT_std: float, n_out: int, width: int = 64, gru_layers: int = 2) -> None:
+    def __init__(
+        self,
+        dT_std: float,
+        n_out: int,
+        width: int = 64,
+        gru_layers: int = 2,
+        extra: tuple[str, ...] = ('dT',),
+        d2T_std: float | None = None,
+    ) -> None:
         super().__init__()
+        unknown = set(extra) - set(EXTRA_CHANNELS)
+        if unknown:
+            raise ValueError(f'Unknown extra channels {unknown}, expected some of {EXTRA_CHANNELS}')
+        if 'd2T' in extra and d2T_std is None:
+            raise ValueError("The 'd2T' channel needs d2T_std")
+        self.extra = tuple(extra)
         self.register_buffer('dT_std', torch.tensor(dT_std))
+        if 'd2T' in extra:  # registered only when used, so older checkpoints still load
+            self.register_buffer('d2T_std', torch.tensor(d2T_std))
 
         def block(c_in: int, c_out: int, stride: int) -> nn.Sequential:
             return nn.Sequential(
@@ -40,7 +74,7 @@ class CNNGRU(nn.Module):
             )
 
         self.cnn = nn.Sequential(
-            block(3, width, 1),
+            block(2 + len(self.extra), width, 1),
             block(width, width, 2),
             block(width, width, 2),
             block(width, width, 2),
@@ -48,10 +82,20 @@ class CNNGRU(nn.Module):
         self.gru = nn.GRU(width, width, num_layers=gru_layers, batch_first=True, bidirectional=True)
         self.mlp = nn.Sequential(nn.Linear(4 * width, 128), nn.GELU(), nn.Linear(128, n_out))
 
+    def add_channels(self, x: torch.Tensor) -> torch.Tensor:
+        """Append the extra channels computed from temperature (channel 0) and heating power (channel 1)."""
+        channels = [x]
+        diff = F.pad(x[:, 0].diff(dim=1), (1, 0))  # first step has no previous value
+        if 'dT' in self.extra:
+            channels.append((diff / self.dT_std).unsqueeze(1))
+        if 'd2T' in self.extra:
+            channels.append((F.pad(diff[:, 1:].diff(dim=1), (2, 0)) / self.d2T_std).unsqueeze(1))
+        if 'energy' in self.extra:
+            channels.append((x[:, 1].cumsum(dim=1) / x.shape[-1]).unsqueeze(1))
+        return torch.cat(channels, dim=1)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        dT = F.pad(x[:, 0].diff(dim=1), (1, 0)) / self.dT_std  # first step has no previous value
-        x = torch.cat([x, dT.unsqueeze(1)], dim=1)
-        seq, _ = self.gru(self.cnn(x).transpose(1, 2))
+        seq, _ = self.gru(self.cnn(self.add_channels(x)).transpose(1, 2))
         return self.mlp(torch.cat([seq.mean(dim=1), seq[:, -1]], dim=1))
 
 
@@ -149,6 +193,9 @@ def build_cnn_gru(
     tgt_std: torch.Tensor,
     y_train_phys: torch.Tensor | None = None,
     width: int = 64,
+    gru_layers: int = 2,
+    extra: tuple[str, ...] = ('dT',),
+    d2T_std: float | None = None,
 ) -> Regressor:
     """Build a CNN-GRU regressor.
 
@@ -159,6 +206,9 @@ def build_cnn_gru(
         tgt_std: Training target stds (physical units), from the scalers.
         y_train_phys: Training targets in physical units, needed for the 'physics' head.
         width: Number of CNN channels and GRU hidden units.
+        gru_layers: Number of stacked GRU layers.
+        extra: Extra input channels computed from T and U (see `CNNGRU`).
+        d2T_std: Scale of the d2T/dt2 channel, from `second_derivative_std`; needed if 'd2T' is in `extra`.
     """
     if head == 'plain':
         out: nn.Module = PlainHead(tgt_mean, tgt_std)
@@ -168,7 +218,8 @@ def build_cnn_gru(
         out = PhysicsHead(physics_head_scales(y_train_phys))
     else:
         raise ValueError(f"Unknown head {head!r}, expected 'plain' or 'physics'")
-    return Regressor(CNNGRU(dT_std, n_out=out.n_raw, width=width), out)
+    backbone = CNNGRU(dT_std, n_out=out.n_raw, width=width, gru_layers=gru_layers, extra=extra, d2T_std=d2T_std)
+    return Regressor(backbone, out)
 
 
 def build_baseline_cnn(tgt_mean: torch.Tensor, tgt_std: torch.Tensor, input_length: int = 480) -> Regressor:
