@@ -22,7 +22,7 @@ The final model is an average of three CNN-GRU networks with a "physics head": a
 
 For comparison, always predicting the training mean gives an HLC MAE of 25.3 W/K, and a simple CNN gives HLC R² 0.37. The physics rules hold in 100% of the test predictions.
 
-The scores are moderate, and I think the main reason is the data, not the model. In the EDA, scenarios with almost identical input curves often have very different targets, and in the experiments a 5× bigger model gained almost nothing. The heating protocol matters much more. Mapping the test error against the PRBS settings of each scenario (used for analysis only, never as a model input), HLC R² goes from 0.30 with the worst settings to 0.47 with the best ones, chosen on validation: blocks of at least about 1.5 h and a probability of being on of 0.4 or more. This is the same idea as the excitation optimization in the reference paper. The notebooks explain this in detail.
+The scores are moderate, and I think the main reason is the data, not the model. In the EDA, scenarios with almost identical input curves often have very different targets, and in the experiments a 5× bigger model gained almost nothing. The heating protocol is the strongest lever I found, but it is not a game changer. Mapping the test error against the PRBS settings of each scenario (used for analysis only, never as a model input), HLC RMSE goes from 26.3 W/K with the worst settings to 22.7 W/K with the best ones, chosen on validation: blocks of at least about 1.5 h and a probability of being on of 0.4 or more. In every case about 22 W/K of error remains. This is the same idea as the excitation optimization in the reference paper. The notebooks explain this in detail.
 
 ## Reading order
 
