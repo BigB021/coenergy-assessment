@@ -1,5 +1,7 @@
 # coEnergy assessment: predicting building indicators from indoor temperature
 
+**Author**: Youssef Aitbouddroub
+
 This project is my answer to the coEnergy internship assessment. The goal is to predict six energy-performance indicators of a building from two time series, using the `quentin_house` simulation dataset (1,000,000 scenarios).
 
 - **Inputs:** indoor air temperature T_int(t) and heating power U(t), 480 one-minute steps (8 hours) per scenario.
