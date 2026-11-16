@@ -10,6 +10,7 @@ import glob
 from dataclasses import dataclass
 from pathlib import Path
 
+import pandas as pd
 import torch
 
 from coenergy.preprocessing import Scalers
@@ -121,3 +122,26 @@ def load_splits(
         raise ValueError(f'Batches contain {offset} scenarios, splits expect {n_total}')
     assert out is not None
     return out
+
+
+def load_solicitation(data_dir: Path) -> pd.DataFrame:
+    """Parameters of the heating-signal generator for every scenario, in dataset order.
+
+    These parameters describe how U(t) was generated (the 'recipe' of the heating signal).
+    They are used for error analysis only, never as a model input: row i matches index i
+    of the split tensors (`SplitData.idx`).
+
+    Args:
+        data_dir: Folder with the batch_*.pt files.
+
+    Returns:
+        One row per scenario, one column per generator parameter.
+    """
+    parts: list[torch.Tensor] = []
+    names: list[str] = []
+    for path in batch_files(data_dir):
+        batch = load_single_batch(path)
+        parts.append(batch.solicitation.clone())
+        names = list(batch.solicitation_field_names)
+        del batch
+    return pd.DataFrame(torch.cat(parts).numpy(), columns=names)

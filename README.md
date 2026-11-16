@@ -20,7 +20,7 @@ The final model is an average of three CNN-GRU networks with a "physics head": a
 
 For comparison, always predicting the training mean gives an HLC MAE of 25.3 W/K, and a simple CNN gives HLC R² 0.37. The physics rules hold in 100% of the test predictions.
 
-The scores are moderate, and I think the main reason is the data, not the model. In the EDA, scenarios with almost identical input curves often have very different targets, and in the experiments a 5× bigger model gained almost nothing. The heating pattern matters much more: scenarios with 1-2 long heating blocks are predicted clearly better (HLC R² 0.47) than scenarios with constant heating (0.32). The notebooks explain this in detail.
+The scores are moderate, and I think the main reason is the data, not the model. In the EDA, scenarios with almost identical input curves often have very different targets, and in the experiments a 5× bigger model gained almost nothing. The heating protocol matters much more. Mapping the test error against the PRBS settings of each scenario (used for analysis only, never as a model input), HLC R² goes from 0.30 with the worst settings to 0.47 with the best ones, chosen on validation: blocks of at least about 1.5 h and a probability of being on of 0.4 or more. This is the same idea as the excitation optimization in the reference paper. The notebooks explain this in detail.
 
 ## Reading order
 
@@ -31,7 +31,7 @@ The notebooks are meant to be read in order. Together they form the report.
 | [`1_eda.ipynb`](notebooks/1_eda.ipynb) | What does the data look like, which physics rules hold, and how much can the inputs tell us? Also creates the train/val/test split and the normalization. |
 | [`2_modeling.ipynb`](notebooks/2_modeling.ipynb) | First models: mean predictor, simple CNN, CNN-GRU with a plain head and with a physics head. Evaluation per target, physics checks, errors by subset. |
 | [`3_improvements.ipynb`](notebooks/3_improvements.ipynb) | What limits the CNN-GRU? Short controlled experiments (3 seeds each, validation only): model size, amount of data, rounding, extra channels, other losses, heating pattern. |
-| [`4_final_model.ipynb`](notebooks/4_final_model.ipynb) | Final model (3-seed ensemble), single evaluation on the test set, results by indicator family, and the project conclusion. |
+| [`4_final_model.ipynb`](notebooks/4_final_model.ipynb) | Final model (3-seed ensemble), single evaluation on the test set, results by indicator family, error map by heating protocol (PRBS settings), and the project conclusion. |
 
 ## Project structure
 
